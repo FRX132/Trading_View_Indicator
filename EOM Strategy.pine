@@ -1,0 +1,322 @@
+//@version=6
+strategy("OOTM strategy", overlay=true,
+     initial_capital=3000,
+     commission_type=strategy.commission.percent,
+     commission_value=0.0,
+     pyramiding=0,
+     calc_on_every_tick=false,
+     process_orders_on_close=true,
+     max_lines_count=200,
+     max_labels_count=200,
+     max_boxes_count=50)
+
+// ───────────────────── Inputs (Chart timezone = UTC+2)
+string asiaSess   = input.session("0200-0800", "Asia Session (UTC+2)")
+string londonSess = input.session("0900-1200", "London Session (UTC+2)")
+string nySess     = input.session("1530-1900", "New York Session (UTC+2)")
+
+bool showAsia   = input.bool(true,  "Show Asia H/L")
+bool showLondon = input.bool(true,  "Show London H/L")
+bool showNY     = input.bool(true,  "Show NY H/L")
+
+int  maLen    = input.int(22, "MA Length")
+bool useEMA22 = input.bool(true, "Use EMA22 (else SMA)")
+int  trendLen = input.int(200, "Trend EMA Len")
+
+bool showTrades   = input.bool(true, "Show Trade Idea Projection")
+bool useRRBox     = input.bool(true, "Use RR Box (cleaner than 3 lines)")
+float rr          = input.float(3.0, "RR (TP = RR * Risk)", step=0.1)
+int   atrLen      = input.int(14, "ATR Len")
+float atrBufMult  = input.float(0.5, "ATR Buffer Mult", step=0.1)
+int   projBars    = input.int(150, "Projection bars", minval=50, maxval=500)
+
+bool useTrendFil = input.bool(true, "Trend filter EMA200")
+bool useMA22Fil  = input.bool(false, "MA22 filter")
+
+bool enableOrders = input.bool(true, "Enable strategy orders (backtest)")
+int  maxTradesPerDay = input.int(2, "Max trades per day", minval=0)
+
+// ───────────────────── Helpers
+inSession(string sess) =>
+    not na(time(timeframe.period, sess))
+
+// ───────────────────── Trend
+float ma22  = useEMA22 ? ta.ema(close, maLen) : ta.sma(close, maLen)
+float emaTr = ta.ema(close, trendLen)
+
+plot(ma22,  "MA22")
+plot(emaTr, "EMA Trend")
+
+bool trendLongOk  = (not useTrendFil) or close > emaTr
+bool trendShortOk = (not useTrendFil) or close < emaTr
+bool maLongOk     = (not useMA22Fil) or close > ma22
+bool maShortOk    = (not useMA22Fil) or close < ma22
+
+// ───────────────────── Session states
+bool asia   = inSession(asiaSess)
+bool london = inSession(londonSess)
+bool ny     = inSession(nySess)
+
+bool asiaStart   = asia and not asia[1]
+bool asiaEnd     = (not asia) and asia[1]
+bool londonStart = london and not london[1]
+bool londonEnd   = (not london) and london[1]
+bool nyStart     = ny and not ny[1]
+bool nyEnd       = (not ny) and ny[1]
+
+// ───────────────────── Session tracking values
+var float aH = na
+var float aL = na
+var float lH = na
+var float lL = na
+var float nH = na
+var float nL = na
+
+// ───────────────────── Single persistent session lines (NO stacking)
+var line aHLine = na
+var line aLLine = na
+var line lHLine = na
+var line lLLine = na
+var line nHLine = na
+var line nLLine = na
+
+// ───────────────────── Asia session (create once, then update)
+if asiaStart
+    aH := high
+    aL := low
+    if showAsia
+        line.delete(aHLine)
+        line.delete(aLLine)
+        aHLine := line.new(bar_index, aH, bar_index + 1, aH, extend=extend.right)
+        aLLine := line.new(bar_index, aL, bar_index + 1, aL, extend=extend.right)
+
+if asia
+    aH := na(aH) ? high : math.max(aH, high)
+    aL := na(aL) ? low  : math.min(aL, low)
+    if showAsia and not na(aHLine) and not na(aLLine)
+        line.set_xy2(aHLine, bar_index + 1, aH)
+        line.set_xy2(aLLine, bar_index + 1, aL)
+
+if asiaEnd and showAsia and not na(aHLine) and not na(aLLine)
+    line.set_xy2(aHLine, bar_index + 1, aH)
+    line.set_xy2(aLLine, bar_index + 1, aL)
+
+// ───────────────────── London session
+if londonStart
+    lH := high
+    lL := low
+    if showLondon
+        line.delete(lHLine)
+        line.delete(lLLine)
+        lHLine := line.new(bar_index, lH, bar_index + 1, lH, extend=extend.right)
+        lLLine := line.new(bar_index, lL, bar_index + 1, lL, extend=extend.right)
+
+if london
+    lH := na(lH) ? high : math.max(lH, high)
+    lL := na(lL) ? low  : math.min(lL, low)
+    if showLondon and not na(lHLine) and not na(lLLine)
+        line.set_xy2(lHLine, bar_index + 1, lH)
+        line.set_xy2(lLLine, bar_index + 1, lL)
+
+if londonEnd and showLondon and not na(lHLine) and not na(lLLine)
+    line.set_xy2(lHLine, bar_index + 1, lH)
+    line.set_xy2(lLLine, bar_index + 1, lL)
+
+// ───────────────────── NY session (optional visuals)
+if nyStart
+    nH := high
+    nL := low
+    if showNY
+        line.delete(nHLine)
+        line.delete(nLLine)
+        nHLine := line.new(bar_index, nH, bar_index + 1, nH, extend=extend.right)
+        nLLine := line.new(bar_index, nL, bar_index + 1, nL, extend=extend.right)
+
+if ny
+    nH := na(nH) ? high : math.max(nH, high)
+    nL := na(nL) ? low  : math.min(nL, low)
+    if showNY and not na(nHLine) and not na(nLLine)
+        line.set_xy2(nHLine, bar_index + 1, nH)
+        line.set_xy2(nLLine, bar_index + 1, nL)
+
+if nyEnd and showNY and not na(nHLine) and not na(nLLine)
+    line.set_xy2(nHLine, bar_index + 1, nH)
+    line.set_xy2(nLLine, bar_index + 1, nL)
+
+// ───────────────────── Finalized levels (for sweep logic)
+var float aH_final = na
+var float aL_final = na
+var float lH_final = na
+var float lL_final = na
+
+if asiaEnd
+    aH_final := aH
+    aL_final := aL
+
+if londonEnd
+    lH_final := lH
+    lL_final := lL
+
+// ───────────────────── Sweep logic (IDEA)
+bool asiaReady   = not na(aH_final) and not na(aL_final)
+bool londonReady = not na(lH_final) and not na(lL_final)
+
+bool allowAsiaEntries   = (london or ny) and (not asia)
+bool allowLondonEntries = ny and (not london)
+
+bool asiaSweepHigh   = asiaReady   and allowAsiaEntries   and (high > aH_final) and (close < aH_final) and barstate.isconfirmed
+bool asiaSweepLow    = asiaReady   and allowAsiaEntries   and (low  < aL_final) and (close > aL_final) and barstate.isconfirmed
+bool londonSweepHigh = londonReady and allowLondonEntries and (high > lH_final) and (close < lH_final) and barstate.isconfirmed
+bool londonSweepLow  = londonReady and allowLondonEntries and (low  < lL_final) and (close > lL_final) and barstate.isconfirmed
+
+bool longIdea  = (asiaSweepLow or londonSweepLow) and trendLongOk and maLongOk
+bool shortIdea = (asiaSweepHigh or londonSweepHigh) and trendShortOk and maShortOk
+
+float sweptLow  = asiaSweepLow  ? aL_final : (londonSweepLow  ? lL_final : na)
+float sweptHigh = asiaSweepHigh ? aH_final : (londonSweepHigh ? lH_final : na)
+
+plotshape(longIdea,  title="Long Idea",  style=shape.triangleup,   location=location.belowbar, size=size.tiny, text="L")
+plotshape(shortIdea, title="Short Idea", style=shape.triangledown, location=location.abovebar, size=size.tiny, text="S")
+
+// ───────────────────── Projection numbers (RR)
+float atr = ta.atr(atrLen)
+float buf = atr * atrBufMult
+float entry = close
+
+float slLong  = not na(sweptLow)  ? (sweptLow  - buf) : na
+float slShort = not na(sweptHigh) ? (sweptHigh + buf) : na
+
+float tpLong  = not na(slLong)  ? (entry + (entry - slLong) * rr) : na
+float tpShort = not na(slShort) ? (entry - (slShort - entry) * rr) : na
+
+// ───────────────────── Trade projection (ONE active only)
+var line  entryLine = na
+var line  slLine    = na
+var line  tpLine    = na
+var label ideaLabel = na
+var box   rrBox     = na
+
+if showTrades and longIdea and not na(slLong) and not na(tpLong)
+    line.delete(entryLine)
+    line.delete(slLine)
+    line.delete(tpLine)
+    label.delete(ideaLabel)
+    box.delete(rrBox)
+
+    if useRRBox
+        float topL = math.max(tpLong, entry)
+        float botL = math.min(slLong, entry)
+        rrBox := box.new(bar_index, topL, bar_index + projBars, botL,
+            bgcolor=color.new(color.green, 90),
+            border_color=color.new(color.green, 40),
+            border_width=1)
+    else
+        entryLine := line.new(bar_index, entry,   bar_index + projBars, entry,   color=color.gray,  extend=extend.right)
+        slLine    := line.new(bar_index, slLong,  bar_index + projBars, slLong,  color=color.red,   extend=extend.right)
+        tpLine    := line.new(bar_index, tpLong,  bar_index + projBars, tpLong,  color=color.green, extend=extend.right)
+
+    ideaLabel := label.new(bar_index + 1, entry,
+        "LONG ▶  E:" + str.tostring(entry) + "  SL:" + str.tostring(slLong) + "  TP:" + str.tostring(tpLong),
+        style=label.style_label_left, textcolor=color.white, color=color.new(color.green, 20), size=size.small)
+
+if showTrades and shortIdea and not na(slShort) and not na(tpShort)
+    line.delete(entryLine)
+    line.delete(slLine)
+    line.delete(tpLine)
+    label.delete(ideaLabel)
+    box.delete(rrBox)
+
+    if useRRBox
+        float topS = math.max(slShort, entry)
+        float botS = math.min(tpShort, entry)
+        rrBox := box.new(bar_index, topS, bar_index + projBars, botS,
+            bgcolor=color.new(color.red, 90),
+            border_color=color.new(color.red, 40),
+            border_width=1)
+    else
+        entryLine := line.new(bar_index, entry,   bar_index + projBars, entry,   color=color.gray,  extend=extend.right)
+        slLine    := line.new(bar_index, slShort, bar_index + projBars, slShort, color=color.red,   extend=extend.right)
+        tpLine    := line.new(bar_index, tpShort, bar_index + projBars, tpShort, color=color.green, extend=extend.right)
+
+    ideaLabel := label.new(bar_index + 1, entry,
+        "SHORT ▶  E:" + str.tostring(entry) + "  SL:" + str.tostring(slShort) + "  TP:" + str.tostring(tpShort),
+        style=label.style_label_left, textcolor=color.white, color=color.new(color.red, 20), size=size.small)
+
+// ───────────────────── TRIGGERS + ORDERS (clean final)
+bool longOnly  = longIdea and not shortIdea
+bool shortOnly = shortIdea and not longIdea
+
+bool longTrig  = longOnly  and not longOnly[1]
+bool shortTrig = shortOnly and not shortOnly[1]
+
+// Max trades/day + flat
+bool newDay = ta.change(time("D")) != 0
+var int tradesToday = 0
+if newDay
+    tradesToday := 0
+
+bool canTradeToday = tradesToday < maxTradesPerDay
+bool flat = strategy.position_size == 0
+
+if enableOrders and canTradeToday
+    if flat and longTrig and not na(slLong) and not na(tpLong)
+        strategy.entry("L", strategy.long)
+        strategy.exit("L-exit", "L", stop=slLong, limit=tpLong)
+        tradesToday += 1
+
+    if flat and shortTrig and not na(slShort) and not na(tpShort)
+        strategy.entry("S", strategy.short)
+        strategy.exit("S-exit", "S", stop=slShort, limit=tpShort)
+        tradesToday += 1
+
+// ───────────────────── TOTAL WIN / LOSS (all history)
+var int wins   = 0
+var int losses = 0
+var int be     = 0
+
+bool newClosedTrade = strategy.closedtrades > nz(strategy.closedtrades[1])
+
+if newClosedTrade
+    float lastProfit = strategy.closedtrades.profit(strategy.closedtrades - 1)
+    if lastProfit > 0
+        wins += 1
+    else if lastProfit < 0
+        losses += 1
+    else
+        be += 1
+
+int totalClosed = wins + losses + be
+float winrate = (wins + losses) > 0 ? (wins * 100.0) / (wins + losses) : na
+
+// ───────── Alerts (JSON) — dynamic via alert()
+f_num(x) => str.tostring(x, format.mintick)
+
+if longTrig and not na(slLong) and not na(tpLong)
+    string jLong =
+      '{' +
+      '"type":"signal",' +
+      '"side":"LONG",' +
+      '"symbol":"' + syminfo.ticker + '",' +
+      '"tf":"' + timeframe.period + '",' +
+      '"entry":"' + f_num(entry) + '",' +
+      '"sl":"' + f_num(slLong) + '",' +
+      '"tp":"' + f_num(tpLong) + '",' +
+      '"rr":"' + str.tostring(rr) + '",' +
+      '"ts":"' + str.tostring(time) + '"' +
+      '}'
+    alert(jLong, alert.freq_once_per_bar_close)
+
+if shortTrig and not na(slShort) and not na(tpShort)
+    string jShort =
+      '{' +
+      '"type":"signal",' +
+      '"side":"SHORT",' +
+      '"symbol":"' + syminfo.ticker + '",' +
+      '"tf":"' + timeframe.period + '",' +
+      '"entry":"' + f_num(entry) + '",' +
+      '"sl":"' + f_num(slShort) + '",' +
+      '"tp":"' + f_num(tpShort) + '",' +
+      '"rr":"' + str.tostring(rr) + '",' +
+      '"ts":"' + str.tostring(time) + '"' +
+      '}'
+    alert(jShort, alert.freq_once_per_bar_close)
