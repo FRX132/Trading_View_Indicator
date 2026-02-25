@@ -95,23 +95,3 @@ Orders:
 - `strategy.entry("S", strategy.short)` and `strategy.exit("S-exit", stop=slShort, limit=tpShort)`
 
 No pyramiding, no flips, no overlapping positions.
-
----
-
-## Alerts (JSON)
-
-On trigger, the script sends a JSON payload via `alert()`:
-
-### Long example
-```json
-{
-  "type":"signal",
-  "side":"LONG",
-  "symbol":"XAUUSD",
-  "tf":"15",
-  "entry":"...",
-  "sl":"...",
-  "tp":"...",
-  "rr":"3",
-  "ts":"..."
-}
