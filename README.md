@@ -1,97 +1,109 @@
-# OOTM Strategy (Pine Script v6) — Session Sweeps + RR Projection
+# OOTM Strategy (Pine Script v6) — Session Sweeps & Breakouts + RR Projection
 
-A TradingView **strategy script** that:
-- Tracks **Asia / London / New York** session highs & lows (UTC+2 inputs)
-- Detects **liquidity sweeps** of finalized session levels
-- Applies optional **EMA200 trend filter** and **MA22 filter**
-- Draws a **trade projection** (RR box or lines) for the current idea
-- Places **backtest orders** (flat-only) with **max trades per day**
-- Emits **JSON alerts** for automation / execution bridges
-- Shows a small **stats table** (wins/losses/BE + daily counts)
+A feature-rich TradingView **strategy script** written in Pine Script v6 that detects and projects high-probability trades based on session high/low levels. 
 
-> Script name: `OOTM strategy`  
-> Pine version: `//@version=6`
+The repository contains two script variants:
+- **[EOM Script.pine](file:///Users/_freakzy_/Desktop/Trading%20VIew%20Indicator/Trading_View_Indicator/EOM%20Script.pine)**: Configured with an initial capital of **$100** (ideal for small account sizing or testing).
+- **[EOM Strategy.pine](file:///Users/_freakzy_/Desktop/Trading%20VIew%20Indicator/Trading_View_Indicator/EOM%20Strategy.pine)**: Configured with an initial capital of **$3,000**.
+
+Both scripts share identical trading logic, indicators, filtering mechanisms, and visual components.
 
 ---
 
-## Core Idea
+## Key Features
 
-### Sessions
-The script defines three sessions (configurable):
+- 🕒 **Session Tracking**: Monitored Sessions: **Asia / London / New York** (customizable, default Vienna/UTC+2 time). Displays session highs and lows with persistent, non-stacking dashed lines.
+- 🔄 **Two Signal Modes**:
+  - **Sweeps Mode** (Default): Detects when price trades beyond a finalized session level (wick break) but closes back inside.
+  - **Breakouts Mode**: Detects when a candle close crosses completely out of a finalized session level.
+- 📈 **Multi-Timeframe RSI Signals**: Plots standalone Multi-Timeframe (MTF) RSI BUY/SELL signals on the chart based on custom oversold (default `20`) and overbought (default `70`) thresholds.
+- 🛡️ **Trend & Momentum Filters**:
+  - **Trend filter** (optional, default ON): Restricts trades to the direction of the **EMA 200**.
+  - **MA22 filter** (optional, default OFF): Restricts trades based on the relation to the **MA 22** (configurable as EMA or SMA).
+- ⚖️ **Dynamic ATR Buffer Multiplier**: Automatically detects currency pairs and scales ATR buffer multipliers for high-volatility pairs:
+  - **GBPJPY**: Scales buffer multiplier by `1.5x`
+  - **GBP pairs**: Scales buffer multiplier by `1.2x`
+  - **JPY pairs**: Scales buffer multiplier by `1.3x`
+  - **Other pairs**: Uses the user-defined ATR buffer multiplier
+- 📐 **Trade Projections**: Draws interactive Risk-to-Reward (RR) boxes or entry/SL/TP lines dynamically for the latest trade idea.
+- 🤖 **Backtesting & Alert Automation**: Flat-only backtesting engine with configurable daily trade limits (default max `2` per day) and structured **JSON Alerts** for webhook/automation bridges.
+- 📊 **Real-time Stats Table**: Displays a customizable HUD containing overall wins, losses, break-evens, win rates, and daily trade metrics.
+
+---
+
+## Technical Details
+
+### Session Settings
+By default, the script tracks:
 - **Asia**: `0200-0800`
 - **London**: `0900-1200`
 - **New York**: `1530-1900`
 
-During each session it continuously updates the session high/low and draws **one persistent high line + one persistent low line** (no stacking).
+Session lines update dynamically as the session develops. At the end of the Asia and London sessions, levels are finalized (`aH_final` / `aL_final` and `lH_final` / `lL_final`) to act as potential sweep or breakout areas:
+- **Asia level trades**: Allowed during **London or New York** sessions.
+- **London level trades**: Allowed during **New York** session only.
 
-At the **end** of Asia/London, it stores a finalized level:
-- `aH_final / aL_final`
-- `lH_final / lL_final`
+### Strategy Rules
 
-### Sweep Conditions
-A sweep is defined as:
-- Price **trades beyond** a finalized level (wick breaks)
-- Candle **closes back inside** (close re-enters)
-- Confirmed bar (`barstate.isconfirmed`)
+#### 1. Sweeps Mode (Default)
+- **Long Entry**: Price wicks below the finalized Asia/London session low and closes back above it.
+- **Short Entry**: Price wicks above the finalized Asia/London session high and closes back below it.
 
-Sweeps are only allowed in specific windows:
-- **Asia sweep entries**: allowed during **London or NY**, but **not during Asia**
-- **London sweep entries**: allowed during **NY**, but **not during London**
+#### 2. Breakouts Mode
+- **Long Entry**: Price closes above the finalized Asia/London session high.
+- **Short Entry**: Price closes below the finalized Asia/London session low.
 
-Signals:
-- **Long idea**: sweep **below** (Asia low or London low) and close back above
-- **Short idea**: sweep **above** (Asia high or London high) and close back below
+### Risk Model
 
----
+For each trade, the Stop Loss (SL) and Take Profit (TP) levels are derived dynamically:
+- **ATR Calculation**: Uses a standard ATR length (default `14`).
+- **Modern Buffer**: `ATR * ATR Buffer Multiplier` (scaled automatically for GBP/JPY pairs).
+- **Long SL**: `Swept/Breakout Level - Buffer`
+- **Short SL**: `Swept/Breakout Level + Buffer`
+- **TP (Take Profit)**: Calculated using the user-defined Risk-to-Reward Ratio (RR) (default `3.0`).
 
-## Filters
-
-Two optional filters:
-- **Trend filter** (default ON): `close > EMA200` for longs, `close < EMA200` for shorts
-- **MA22 filter** (default OFF): `close > MA22` for longs, `close < MA22` for shorts  
-  MA22 can be EMA or SMA via input.
-
-Plots:
-- `MA22`
-- `EMA Trend` (EMA200)
+### Filters
+- **Trend Filter**: Longs allowed only when `close > EMA 200`. Shorts allowed only when `close < EMA 200`.
+- **MA22 Filter**: Longs allowed only when `close > MA 22`. Shorts allowed only when `close < MA 22`.
+- **Timeframe Filter**: Option to restrict signals strictly to the `15m` timeframe (`tf15mOnly`).
 
 ---
 
-## Risk Model & Projection
+## Strategy Alerts (JSON Output)
+The script triggers alerts on bar close with the following format:
 
-Risk is derived from the swept level plus an ATR buffer:
-- `ATR(atrLen)` * `atrBufMult`
+**Long Alert Schema:**
+```json
+{
+  "type": "signal",
+  "side": "LONG",
+  "symbol": "EURUSD",
+  "tf": "15",
+  "entry": "1.08500",
+  "sl": "1.08200",
+  "tp": "1.09400",
+  "rr": "3.0",
+  "ts": "1718367000000"
+}
+```
 
-Stops:
-- Long SL: `sweptLow - buf`
-- Short SL: `sweptHigh + buf`
-
-Take profit uses RR:
-- Long TP: `entry + (entry - SL) * rr`
-- Short TP: `entry - (SL - entry) * rr`
-
-Visualization:
-- Either a clean **RR box** (`useRRBox=true`)  
-- Or three lines (entry/SL/TP)
-
-Only **one active projection** exists at a time; new ideas delete the old drawing objects.
+**Short Alert Schema:**
+```json
+{
+  "type": "signal",
+  "side": "SHORT",
+  "symbol": "EURUSD",
+  "tf": "15",
+  "entry": "1.08500",
+  "sl": "1.08800",
+  "tp": "1.07600",
+  "rr": "3.0",
+  "ts": "1718367000000"
+}
+```
 
 ---
 
-## Strategy Orders (Backtest)
-
-Controlled by:
-- `enableOrders` (default ON)
-- `maxTradesPerDay` (default 2)
-- Flat-only execution (`strategy.position_size == 0`)
-
-Triggering:
-- Uses **edge trigger** so it only fires on the first bar a signal appears:
-  - `longTrig = longOnly and not longOnly[1]`
-  - `shortTrig = shortOnly and not shortOnly[1]`
-
-Orders:
-- `strategy.entry("L", strategy.long)` and `strategy.exit("L-exit", stop=slLong, limit=tpLong)`
-- `strategy.entry("S", strategy.short)` and `strategy.exit("S-exit", stop=slShort, limit=tpShort)`
-
-No pyramiding, no flips, no overlapping positions.
+## Backtest Constraints
+- **Flat-Only Execution**: The script operates flat-to-flat. No pyramiding or position building is permitted (`strategy.position_size == 0` check).
+- **Daily Limits**: Rejects trades once the daily count reaches the user-specified maximum (e.g., `2` trades per day). Reset occurs daily at Vienna midnight.
